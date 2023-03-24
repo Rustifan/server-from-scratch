@@ -5,7 +5,7 @@ pub struct HttpResponse<'a>{
     version: &'a str,
     status_code: &'a str,
     status_text: &'a str,
-    headers: HashMap<&'a str, &'a str>,
+    headers: HashMap<&'a str, String>,
     body: Option<String>
 }
 
@@ -24,14 +24,17 @@ impl <'a>Default for HttpResponse<'a> {
 impl<'a> HttpResponse<'a>{
     pub fn new(
         status_code: &'a str,
-        headers: Option<HashMap<&'a str, &'a str>>,
+        headers: Option<HashMap<&'a str, String>>,
         body: Option<String>
     )->Self{
         let mut http_response = Self::default();
         http_response.status_code = status_code;
         match headers {
             Some(headers) => {http_response.headers = headers},
-            None=>{http_response.headers.insert("Content-Type", "text/html");}
+            None=>{
+                http_response.headers.insert("Content-Type", "text/html".to_string());
+                http_response.headers.insert("Connection", "keep-alive".to_string());
+            }
         }
         http_response.status_text = match status_code {
             "200" => "OK",
@@ -54,8 +57,20 @@ impl<'a> HttpResponse<'a>{
         })
     }
 
-    pub fn send_response(&self, stream: &mut impl Write)->Result<usize, Error>{
-        stream.write(String::from(self.clone()).as_bytes())
+    fn set_content_length_header(&mut self){
+        let body_length: String =  match &self.body{
+            Some(body)=>body.len().to_string(),
+            None=>"0".to_string()
+        };
+     
+        self.headers.insert("Content-Length", body_length);
+
+    }
+
+    pub fn send_response(&mut self, stream: &mut impl Write)-> Result<(), Error>{
+        self.set_content_length_header();
+        stream.write_all(String::from(self.clone()).as_bytes())?;
+        stream.flush()
     }
 }
 
@@ -80,17 +95,17 @@ mod test {
     #[test]
     fn test_get_headers_from_string(){
         let mut headers = HashMap::new();
-        headers.insert("Content-Type", "text/html");
-        headers.insert("Authentication", "Bearer 123456");
+        headers.insert("Content-Type", "text/html".to_string());
+        headers.insert("Authentication", "Bearer 123456".to_string());
 
         let res = HttpResponse::new("200", Some(headers), None);       
-        assert_eq!(res.get_headers_as_string(), "Content-Type: text/html\r\nAuthentication: Bearer 123456\r\n");
+        assert_eq!(res.get_headers_as_string(), "Content-Type: text/html\r\nAuthentication: Bearer 123456\r\n".to_string());
     }
     #[test]
     fn test_string_from_http_response(){
         let mut headers = HashMap::new();
-        headers.insert("Content-Type", "text/html");
-        headers.insert("Authentication", "Bearer 123456");
+        headers.insert("Content-Type", "text/html".to_string());
+        headers.insert("Authentication", "Bearer 123456".to_string());
         let response = HttpResponse::new("404", Some(headers), Some(String::from("Hello world")));
         
         let response_string = String::from(response);

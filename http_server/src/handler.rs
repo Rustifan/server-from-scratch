@@ -45,21 +45,21 @@ impl Handler for StaticPageHandler {
     }
 }
 
-fn get_headers_base_on_extension(file_name: &str) -> HashMap<&str, &str> {
-    let mut headers: HashMap<&str, &str> = HashMap::new();
+fn get_headers_base_on_extension(file_name: &str) -> HashMap<&str, String> {
+    let mut headers: HashMap<&str, String> = HashMap::new();
     let key = "Content-Type";
     match file_name.split('.').last() {
         Some("css") => {
-            headers.insert(key, "text/css");
+            headers.insert(key, "text/css".to_string());
         }
         Some("js") => {
-            headers.insert(key, "text/javascript");
+            headers.insert(key, "text/javascript".to_string());
         }
         Some("html") => {
-            headers.insert(key, "text/html");
+            headers.insert(key, "text/html".to_string());
         }
         _ => {
-            headers.insert(key, "text/plain");
+            headers.insert(key, "text/plain".to_string());
         }
     }
 

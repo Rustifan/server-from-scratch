@@ -8,7 +8,7 @@ pub struct Router;
 
 impl Router{
     pub fn route(req: HttpRequest, mut stream: &mut impl Write){
-        let response = match req.method {
+        let mut response = match req.method {
             Method::Get => {
                 StaticPageHandler::handle(&req)
             }

@@ -1,26 +1,26 @@
 use std::{collections::HashMap, str::Lines};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Resource {
     Path(String)
 }
 
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Method{
     Get,
     Post,
     Uninitialized,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Version{
     V1_1,
     V2_0,
     Uninitialized
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HttpRequest{
     pub method: Method,
     pub version: Version,
