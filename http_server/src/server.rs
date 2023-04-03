@@ -1,32 +1,49 @@
-use std::{net::{TcpListener, TcpStream}, io::{Read, ErrorKind}, time::{ Duration, Instant}, sync::{Arc, Mutex}, thread, collections::LinkedList};
+use std::{net::{TcpListener, TcpStream, SocketAddr}, io::{Read, ErrorKind, Write, Error}, time::{ Duration, Instant}, sync::{Arc, Mutex}, thread, collections::{LinkedList}};
 use http::{http_request::{HttpRequest}};
-use super::router::Router;
+use crate::web_socket::{handle_web_socket_upgrade, WebSocketConnections, read_web_socket_message};
 
+use super::router::Router;
 
 pub struct Connection{
     stream: TcpStream,
     last_time: Instant
 }
 
+impl Connection {
+    pub fn get_source_address(&self)->SocketAddr{
+        self.stream.peer_addr().expect("No peer address error")
+    }
+
+    pub fn write(&mut self, data: &[u8])-> Result<(), Error>{
+        self.stream.write(data)?;
+        self.stream.flush()
+    }
+}
+
+enum ConnectionStatus{
+    Close,
+    Open,
+    Handled,
+    SocketUpgrade
+}
+
 impl Connection{
     pub fn new(stream: TcpStream)->Self{
         Connection {
             stream,
-            last_time: Instant::now(),
+            last_time:Instant::now()
         }
     }
 
     pub fn is_timeout(&self, timeout: u64)->bool{
-        let now = Instant::now();
-        let lasted = now.duration_since(self.last_time).as_secs();
-        //TODO
-        lasted > timeout
+        self.last_time.elapsed() > Duration::from_secs(timeout)
     }
 }
 
 pub struct Server<'a>{
     socket_address: &'a str,
-    connections: Arc<Mutex<LinkedList<Connection>>>
+    connections: Arc<Mutex<LinkedList<Connection>>>,
+    web_socket_connections: Arc<Mutex<WebSocketConnections>>
 }
 
 const MAX_THREADS: u32 = 1;
@@ -37,7 +54,8 @@ impl <'a> Server<'a>{
     pub fn new(socket_address:  &'a str)->Self{
         Server {
             socket_address, 
-            connections: Arc::new(Mutex::new(LinkedList::new()))
+            connections: Arc::new(Mutex::new(LinkedList::new())),
+            web_socket_connections: Arc::new(Mutex::new(WebSocketConnections::new()))
         }
     }
     
@@ -45,13 +63,33 @@ impl <'a> Server<'a>{
     fn set_worker_threads(&self){
         for _ in 0..MAX_THREADS{
             let connections = Arc::clone(&self.connections);
+            let ws_connections = Arc::clone(&self.web_socket_connections);
+
             thread::spawn(move || loop {
-                let connection = connections.lock().unwrap().pop_back();
+               
+                let ws_connection = ws_connections.lock().unwrap().pop();
+               
+                if let Some(ws_connection) = ws_connection {
+                    let mut connection_ptr = ws_connection;
+                    let connection = Arc::get_mut(&mut connection_ptr).expect("Failed to get mut");
+                    let status = handle_web_socket_connection(&mut connection.stream);
+                    match status {
+                        ConnectionStatus::Open => {
+                            ws_connections
+                            .lock()
+                            .expect("Mutec lock failed")
+                            .insert(&connection_ptr);
+                        },
+                        _=>{}
+                    }
+                }
+
+
                 
+                let connection = connections.lock().unwrap().pop_back();
                 let mut connection = match connection {
                     Some(connection)=>{
                         if connection.is_timeout(KEEP_ALIVE_TIME){
-                            println!("Ban");
                             continue;
                         }
                         connection
@@ -62,11 +100,20 @@ impl <'a> Server<'a>{
                     }
                 };
 
-                let bring_back_connection = handle_connection(&mut connection.stream);
-                if bring_back_connection {
-                    connection.last_time = Instant::now();
-                    connections.lock().unwrap().push_front(connection)
+                let connection_status = handle_connection(&mut connection.stream);
+                match connection_status {
+                    ConnectionStatus::Close => continue,
+                    ConnectionStatus::Handled=>{connection.last_time = Instant::now();},
+                    
+                    ConnectionStatus::SocketUpgrade=>{
+                        ws_connections.lock().expect("to lock ws connections")
+                        .insert(&Arc::new(connection));
+                        continue;
+                    },
+                
+                    _=>{}
                 }
+                connections.lock().unwrap().push_front(connection);
             });
         }
     }
@@ -87,27 +134,60 @@ impl <'a> Server<'a>{
 }
             
 
-fn handle_connection(stream: &mut TcpStream)->bool{
+fn handle_connection(stream: &mut TcpStream)->ConnectionStatus{
     stream.set_nonblocking(true).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let ip = stream.peer_addr().unwrap();
     let mut read_buffer = vec![0; 1024];
     let size = stream.read(&mut read_buffer);
     let _ = match size {
-      Ok(0)=>return false,  
+      Ok(0)=>return ConnectionStatus::Close,  
       Ok(size)=>size,  
       Err(e) if e.kind() == ErrorKind::WouldBlock => {
      
-        return true
+        return ConnectionStatus::Open
         }
         Err(e)=>{
             println!("{}", e);
-            return false
+            return ConnectionStatus::Close
         }
     };
     println!("connection - {ip}");
     let req: HttpRequest = String::from_utf8(read_buffer.to_vec()).unwrap().trim_matches(char::from(0)).into();
+    
+    //check if request is web socket handshake
+    let ws_result = handle_web_socket_upgrade(&req, stream);
+    if let Err(s) = ws_result {
+        println!("{s}");
+    }else{
+        return ConnectionStatus::SocketUpgrade;
+    }
+
     Router::route(req, stream);
-    return true
+
+    return ConnectionStatus::Handled
 }
     
+
+fn handle_web_socket_connection(stream: &mut TcpStream)->ConnectionStatus{
+    let mut read_buffer = [0; 1024];
+    let size = stream.read(&mut read_buffer);
+    let size = match size {
+      Ok(0)=>return ConnectionStatus::Close,  
+      Ok(size)=>size,  
+      Err(e) if e.kind() == ErrorKind::WouldBlock => {
+     
+        return ConnectionStatus::Open
+        }
+        Err(e)=>{
+            println!("{}", e);
+            return ConnectionStatus::Close
+        }
+    };
+
+    let buffer = &read_buffer[..size];
+    read_web_socket_message(buffer);
+   
+
+    ConnectionStatus::Open
+}
+

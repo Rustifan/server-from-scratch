@@ -37,6 +37,7 @@ impl<'a> HttpResponse<'a>{
             }
         }
         http_response.status_text = match status_code {
+            "101" => "Switching Protocols",
             "200" => "OK",
             "400" => "Bad request",
             "404" => "Not Found",
